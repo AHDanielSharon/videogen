@@ -24,7 +24,7 @@ async function postJson(url, data) {
   });
 
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || 'Request failed');
+  if (!response.ok) throw new Error(formatApiError(result));
   return result;
 }
 
@@ -32,13 +32,31 @@ function setResult(el, data) {
   el.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
 }
 
+function formatApiError(result) {
+  if (!result) return 'Request failed';
+  const lines = [];
+  if (result.error) lines.push(result.error);
+  if (Array.isArray(result.recoverySteps) && result.recoverySteps.length) {
+    lines.push('');
+    lines.push('How to fix:');
+    result.recoverySteps.forEach((s, i) => lines.push(`${i + 1}. ${s}`));
+  }
+  if (result.details) {
+    lines.push('');
+    lines.push('Raw details:');
+    lines.push(typeof result.details === 'string' ? result.details : JSON.stringify(result.details));
+  }
+  return lines.join('\n');
+}
+
 async function loadConfigStatus() {
   try {
     const response = await fetch('/api/config');
     const config = await response.json();
+    const configured = Boolean(config.huggingFaceConfigured ?? config.geminiConfigured);
     configStatus.textContent = config.message;
-    configStatus.classList.toggle('ok', Boolean(config.geminiConfigured));
-    configStatus.classList.toggle('error', !config.geminiConfigured);
+    configStatus.classList.toggle('ok', configured);
+    configStatus.classList.toggle('error', !configured);
   } catch {
     configStatus.textContent = 'Could not load Gemini configuration status.';
     configStatus.classList.add('error');
@@ -73,7 +91,7 @@ document.getElementById('photoVideoBtn').addEventListener('click', async () => {
 
     const response = await fetch('/api/video/photo', { method: 'POST', body: fd });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || 'Request failed');
+    if (!response.ok) throw new Error(formatApiError(result));
     setResult(resultEl, result);
   } catch (error) {
     setResult(resultEl, error.message);

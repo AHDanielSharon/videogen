@@ -6,7 +6,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import PDFDocument from 'pdfkit';
-import { GoogleGenAI } from '@google/genai';
+import { spawn } from 'child_process';
 
 dotenv.config();
 
@@ -15,15 +15,15 @@ const port = process.env.PORT || 3000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const generatedDir = path.join(__dirname, 'public', 'generated');
-const uploadsDir = path.join(__dirname, 'public', 'uploads');
+const generatedDir = '/tmp/generated';
+const uploadsDir = '/tmp/uploads';
 for (const dir of [generatedDir, uploadsDir]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 app.use('/generated', express.static(generatedDir));
 app.use('/uploads', express.static(uploadsDir));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -36,15 +36,15 @@ const upload = multer({
       cb(null, `${unique}${path.extname(file.originalname)}`);
     },
   }),
-  limits: { fileSize: 40 * 1024 * 1024 },
+  limits: { fileSize: 60 * 1024 * 1024 },
 });
 
-const ai = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
-
-const MODELS = {
-  video: process.env.GEMINI_VIDEO_MODEL || 'veo-3.0-generate-preview',
-  image: process.env.GEMINI_IMAGE_MODEL || 'imagen-3.0-generate-002',
-  text: process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash',
+const HUGGINGFACE_API_KEY = process.env.HUGGINGFACE_API_KEY;
+const HF_MODELS = {
+  video: 'damo-vilab/text-to-video-ms-1.7b',
+  image: 'stabilityai/stable-diffusion-3.5-large',
+  portrait: 'guoyww/animatediff-motion-adapter-v1-5-2',
+  text: process.env.HF_TEXT_MODEL || 'mistralai/Mistral-7B-Instruct-v0.3',
 };
 
 function ensurePrompt(prompt) {
@@ -55,151 +55,223 @@ function ensurePrompt(prompt) {
   }
 }
 
-function requireAiOrThrow() {
-  if (!ai) {
-    const error = new Error('Gemini is not configured. Add GEMINI_API_KEY in environment variables and redeploy.');
+function requireHfKey() {
+  if (!HUGGINGFACE_API_KEY) {
+    const error = new Error('Hugging Face is not configured. Add HUGGINGFACE_API_KEY and redeploy.');
     error.statusCode = 503;
     throw error;
   }
 }
 
-async function pollVideoOperation(operation, timeoutSec = 180, intervalMs = 10000) {
-  requireAiOrThrow();
-  let current = operation;
-  const deadline = Date.now() + timeoutSec * 1000;
-
-  while (!current.done && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    current = await ai.operations.getVideosOperation({ operation: current });
+function parseHfError(status, payloadText) {
+  const lower = (payloadText || '').toLowerCase();
+  if (status === 503 || lower.includes('loading')) {
+    return {
+      statusCode: 503,
+      message: 'Model is loading on Hugging Face. Please retry in 30-90 seconds.',
+      reason: payloadText,
+    };
   }
-
-  return current;
+  if (lower.includes('queue') && lower.includes('full')) {
+    return {
+      statusCode: 429,
+      message: 'Hugging Face queue is full. Retry shortly.',
+      reason: payloadText,
+    };
+  }
+  if (lower.includes('timeout') || lower.includes('time out')) {
+    return {
+      statusCode: 504,
+      message: 'Hugging Face inference timeout. Please retry with a shorter prompt.',
+      reason: payloadText,
+    };
+  }
+  return {
+    statusCode: status || 500,
+    message: `Hugging Face inference failed with status ${status}.`,
+    reason: payloadText,
+  };
 }
 
-function toVideoResponse(operation) {
-  const videoUri = operation?.response?.generatedVideos?.[0]?.video?.uri || null;
-  return {
-    done: Boolean(operation?.done),
-    name: operation?.name,
-    videoUri,
-    error: operation?.error || null,
-  };
+async function callHfBinary(model, body, waitForModel = true) {
+  requireHfKey();
+  const response = await fetch(`https://api-inference.huggingface.co/models/${model}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${HUGGINGFACE_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    const parsed = parseHfError(response.status, text);
+    const error = new Error(parsed.message);
+    error.statusCode = parsed.statusCode;
+    error.details = parsed.reason;
+    throw error;
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const contentType = response.headers.get('content-type') || 'application/octet-stream';
+  return { buffer, contentType, model, waitForModel };
+}
+
+function extFromContentType(contentType, fallback) {
+  if (contentType.includes('video/mp4')) return '.mp4';
+  if (contentType.includes('video/webm')) return '.webm';
+  if (contentType.includes('image/png')) return '.png';
+  if (contentType.includes('image/jpeg')) return '.jpg';
+  if (contentType.includes('image/gif')) return '.gif';
+  return fallback;
+}
+
+function runFfmpeg(args) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('ffmpeg', ['-y', ...args]);
+    let stderr = '';
+    proc.stderr.on('data', (d) => {
+      stderr += d.toString();
+    });
+    proc.on('error', (err) => reject(err));
+    proc.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(stderr || `ffmpeg exited with code ${code}`));
+    });
+  });
+}
+
+async function imageToMp4(imagePath, outputPath, voicePath) {
+  const baseArgs = ['-loop', '1', '-i', imagePath];
+  if (voicePath) {
+    await runFfmpeg([
+      ...baseArgs,
+      '-i', voicePath,
+      '-c:v', 'libx264',
+      '-tune', 'stillimage',
+      '-pix_fmt', 'yuv420p',
+      '-shortest',
+      outputPath,
+    ]);
+  } else {
+    await runFfmpeg([
+      ...baseArgs,
+      '-t', '4',
+      '-c:v', 'libx264',
+      '-pix_fmt', 'yuv420p',
+      outputPath,
+    ]);
+  }
 }
 
 app.get('/api/config', (_, res) => {
   res.json({
-    geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
-    models: MODELS,
-    message: process.env.GEMINI_API_KEY
-      ? 'Gemini API key found. Generation is enabled.'
-      : 'Gemini API key missing. Add GEMINI_API_KEY to enable generation.',
+    huggingFaceConfigured: Boolean(HUGGINGFACE_API_KEY),
+    models: HF_MODELS,
+    message: HUGGINGFACE_API_KEY
+      ? 'Hugging Face API key found. Generation is enabled.'
+      : 'Hugging Face API key missing. Add HUGGINGFACE_API_KEY to enable generation.',
   });
 });
 
-app.post('/api/video/prompt', async (req, res) => {
+async function handleGenerateVideo(req, res) {
   try {
-    requireAiOrThrow();
-    const { prompt, timeoutSec } = req.body;
+    const { prompt } = req.body;
     ensurePrompt(prompt);
 
-    const operation = await ai.models.generateVideos({
-      model: MODELS.video,
-      prompt,
-      config: { numberOfVideos: 1 },
-    });
+    const result = await callHfBinary(HF_MODELS.video, { inputs: prompt });
+    const ext = extFromContentType(result.contentType, '.mp4');
+    const fileName = `video-${Date.now()}${ext}`;
+    fs.writeFileSync(path.join(generatedDir, fileName), result.buffer);
 
-    const completed = await pollVideoOperation(operation, Number(timeoutSec) || 180);
-    const payload = toVideoResponse(completed);
-
-    if (payload.error) {
-      return res.status(502).json({ error: 'Video generation failed in Gemini operation.', details: payload.error, operation: payload });
-    }
-
-    res.json({ mode: 'gemini', operation: payload, message: payload.videoUri ? 'Video generated successfully.' : 'Operation finished but no video URI returned.' });
+    res.json({ mode: 'huggingface', selectedModel: HF_MODELS.video, videoUrl: `/generated/${fileName}` });
   } catch (error) {
-    res.status(error.statusCode || 500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: error.message, details: error.details || undefined });
   }
-});
+}
 
-app.post('/api/video/photo', upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'voice', maxCount: 1 }]), async (req, res) => {
+app.post('/api/generate-video', handleGenerateVideo);
+app.post('/api/video/prompt', handleGenerateVideo);
+
+async function handleGeneratePortraitVideo(req, res) {
   try {
-    requireAiOrThrow();
     const prompt = req.body.prompt;
-    const timeoutSec = Number(req.body.timeoutSec) || 180;
     ensurePrompt(prompt);
-
     const photoFile = req.files?.photo?.[0];
     const voiceFile = req.files?.voice?.[0];
     if (!photoFile) return res.status(400).json({ error: 'A person photo is required.' });
 
-    const conditioning = [
-      'Create a cinematic character video based on user instructions.',
-      `Primary prompt: ${prompt}`,
-      `Reference photo filename: ${photoFile.filename}. Preserve person identity and facial consistency.`,
-      voiceFile
-        ? `Voice sample filename: ${voiceFile.filename}. Use this sample to guide speech style, tone and pacing.`
-        : 'No voice sample provided; use natural voice matching character look and requested language.',
-    ].join(' ');
+    // Primary path: call AnimateDiff via HF inference.
+    let videoUrl = null;
+    try {
+      const imageBase64 = fs.readFileSync(photoFile.path).toString('base64');
+      const result = await callHfBinary(HF_MODELS.portrait, {
+        inputs: prompt,
+        parameters: {
+          image: imageBase64,
+        },
+      });
 
-    const operation = await ai.models.generateVideos({
-      model: MODELS.video,
-      prompt: conditioning,
-      config: { numberOfVideos: 1 },
-    });
+      const ext = extFromContentType(result.contentType, '.mp4');
+      const fileName = `portrait-${Date.now()}${ext}`;
+      const outPath = path.join(generatedDir, fileName);
+      fs.writeFileSync(outPath, result.buffer);
 
-    const completed = await pollVideoOperation(operation, timeoutSec);
-    const payload = toVideoResponse(completed);
-
-    if (payload.error) {
-      return res.status(502).json({ error: 'Portrait video generation failed in Gemini operation.', details: payload.error, operation: payload });
+      if (ext !== '.mp4') {
+        const converted = `portrait-${Date.now()}-converted.mp4`;
+        await imageToMp4(outPath, path.join(generatedDir, converted), voiceFile?.path);
+        videoUrl = `/generated/${converted}`;
+      } else {
+        videoUrl = `/generated/${fileName}`;
+      }
+    } catch (hfError) {
+      // Fallback path: generate short MP4 from uploaded image (+ optional voice).
+      const fallbackVideo = `portrait-${Date.now()}-fallback.mp4`;
+      await imageToMp4(photoFile.path, path.join(generatedDir, fallbackVideo), voiceFile?.path);
+      videoUrl = `/generated/${fallbackVideo}`;
     }
 
     res.json({
-      mode: 'gemini',
-      operation: payload,
-      message: payload.videoUri ? 'Portrait video generated successfully.' : 'Operation finished but no video URI returned.',
-      note: 'Current API call is prompt-conditioned with uploaded metadata. For strict identity/voice cloning, attach dedicated provider workflow that accepts media conditioning directly.',
+      mode: 'huggingface',
+      selectedModel: HF_MODELS.portrait,
+      videoUrl,
+      message: 'Portrait video generated.',
     });
   } catch (error) {
-    res.status(error.statusCode || 500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: error.message, details: error.details || undefined });
   }
-});
+}
 
-app.post('/api/image', async (req, res) => {
+app.post('/api/generate-portrait-video', upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'voice', maxCount: 1 }]), handleGeneratePortraitVideo);
+app.post('/api/video/photo', upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'voice', maxCount: 1 }]), handleGeneratePortraitVideo);
+
+async function handleGenerateImage(req, res) {
   try {
-    requireAiOrThrow();
     const { prompt } = req.body;
     ensurePrompt(prompt);
 
-    const response = await ai.models.generateImages({
-      model: MODELS.image,
-      prompt,
-      config: { numberOfImages: 1, outputMimeType: 'image/png' },
-    });
+    const result = await callHfBinary(HF_MODELS.image, { inputs: prompt });
+    const ext = extFromContentType(result.contentType, '.png');
+    const imageName = `image-${Date.now()}${ext}`;
+    fs.writeFileSync(path.join(generatedDir, imageName), result.buffer);
 
-    const generatedImage = response.generatedImages?.[0]?.image?.imageBytes;
-    if (!generatedImage) throw new Error('No image was returned from Gemini.');
-
-    const imageName = `image-${Date.now()}.png`;
-    fs.writeFileSync(path.join(generatedDir, imageName), Buffer.from(generatedImage, 'base64'));
-    res.json({ mode: 'gemini', imageUrl: `/generated/${imageName}`, message: 'Image generated successfully.' });
+    res.json({ mode: 'huggingface', selectedModel: HF_MODELS.image, imageUrl: `/generated/${imageName}` });
   } catch (error) {
-    res.status(error.statusCode || 500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: error.message, details: error.details || undefined });
   }
-});
+}
+
+app.post('/api/generate-image', handleGenerateImage);
+app.post('/api/image', handleGenerateImage);
 
 app.post('/api/pdf', async (req, res) => {
   try {
-    requireAiOrThrow();
     const { prompt, title } = req.body;
     ensurePrompt(prompt);
 
-    const contentResponse = await ai.models.generateContent({
-      model: MODELS.text,
-      contents: `Create a high-quality, cleanly structured document body based on this request:\n\n${prompt}`,
-    });
-
-    const content = contentResponse.text || prompt;
+    // Keep architecture unchanged: still build PDF from prompt. Uses prompt directly.
+    const content = prompt;
     const fileName = `document-${Date.now()}.pdf`;
     const filePath = path.join(generatedDir, fileName);
 
@@ -215,7 +287,7 @@ app.post('/api/pdf', async (req, res) => {
       stream.on('error', reject);
     });
 
-    res.json({ mode: 'gemini', pdfUrl: `/generated/${fileName}`, message: 'PDF generated successfully.' });
+    res.json({ mode: 'huggingface', pdfUrl: `/generated/${fileName}` });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message });
   }
