@@ -1,4 +1,5 @@
 const installBtn = document.getElementById('installBtn');
+const configStatus = document.getElementById('configStatus');
 let deferredPrompt;
 
 window.addEventListener('beforeinstallprompt', (event) => {
@@ -31,12 +32,25 @@ function setResult(el, data) {
   el.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
 }
 
+async function loadConfigStatus() {
+  try {
+    const response = await fetch('/api/config');
+    const config = await response.json();
+    configStatus.textContent = config.message;
+    configStatus.classList.toggle('ok', Boolean(config.geminiConfigured));
+    configStatus.classList.toggle('error', !config.geminiConfigured);
+  } catch {
+    configStatus.textContent = 'Could not load Gemini configuration status.';
+    configStatus.classList.add('error');
+  }
+}
+
 document.getElementById('videoPromptBtn').addEventListener('click', async () => {
   const resultEl = document.getElementById('videoPromptResult');
   try {
-    setResult(resultEl, 'Generating...');
+    setResult(resultEl, 'Generating video... this can take up to 2-3 minutes.');
     const prompt = document.getElementById('videoPrompt').value;
-    const result = await postJson('/api/video/prompt', { prompt });
+    const result = await postJson('/api/video/prompt', { prompt, timeoutSec: 180 });
     setResult(resultEl, result);
   } catch (error) {
     setResult(resultEl, error.message);
@@ -46,10 +60,11 @@ document.getElementById('videoPromptBtn').addEventListener('click', async () => 
 document.getElementById('photoVideoBtn').addEventListener('click', async () => {
   const resultEl = document.getElementById('photoVideoResult');
   try {
-    setResult(resultEl, 'Generating...');
+    setResult(resultEl, 'Generating portrait video... this can take up to 2-3 minutes.');
 
     const fd = new FormData();
     fd.append('prompt', document.getElementById('photoVideoPrompt').value);
+    fd.append('timeoutSec', '180');
 
     const photo = document.getElementById('personPhoto').files[0];
     const voice = document.getElementById('personVoice').files[0];
@@ -69,7 +84,7 @@ document.getElementById('imageBtn').addEventListener('click', async () => {
   const resultEl = document.getElementById('imageResult');
   const output = document.getElementById('imageOutput');
   try {
-    setResult(resultEl, 'Generating...');
+    setResult(resultEl, 'Generating image...');
     output.hidden = true;
     const prompt = document.getElementById('imagePrompt').value;
     const result = await postJson('/api/image', { prompt });
@@ -87,7 +102,7 @@ document.getElementById('pdfBtn').addEventListener('click', async () => {
   const resultEl = document.getElementById('pdfResult');
   const link = document.getElementById('pdfLink');
   try {
-    setResult(resultEl, 'Generating...');
+    setResult(resultEl, 'Generating PDF...');
     link.hidden = true;
 
     const prompt = document.getElementById('pdfPrompt').value;
@@ -111,3 +126,5 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/service-worker.js');
   });
 }
+
+loadConfigStatus();

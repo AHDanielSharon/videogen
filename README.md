@@ -13,13 +13,19 @@ A colorful neon AI creation app that supports:
 ```bash
 npm install
 cp .env.example .env
-# add your GEMINI_API_KEY in .env
+# REQUIRED: set GEMINI_API_KEY in .env
 npm run dev
 ```
 
 Open: `http://localhost:3000`
 
-## Notes
+## Important
 
-- If no `GEMINI_API_KEY` is configured, the app runs in demo mode and returns mock/simulated outputs where needed.
+- Generation endpoints require `GEMINI_API_KEY` and will return an explicit error if missing.
+- Video generation uses Gemini long-running operations and can take 1–3 minutes.
 - Prompts use textareas and are not length-capped by app code.
+
+## Render quick check
+
+- Ensure `GEMINI_API_KEY` is set in Render environment variables.
+- Verify `/api/config` returns `"geminiConfigured": true` after deploy.

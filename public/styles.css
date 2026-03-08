@@ -126,3 +126,17 @@ img {
   color: var(--cyan);
   text-decoration: none;
 }
+
+
+.status {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  display: inline-block;
+  border: 1px solid rgba(255,255,255,.25);
+  background: rgba(255,255,255,.06);
+  font-size: .95rem;
+}
+
+.status.ok { color: #7dffd6; border-color: rgba(125,255,214,.5); }
+.status.error { color: #ff9ea8; border-color: rgba(255,158,168,.5); }
