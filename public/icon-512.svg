@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Neon AI icon">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="30%" r="80%">
+      <stop offset="0%" stop-color="#1f1142"/>
+      <stop offset="100%" stop-color="#070114"/>
+    </radialGradient>
+    <linearGradient id="ring" x1="0%" x2="100%" y1="0%" y2="100%">
+      <stop offset="0%" stop-color="#00e4ff"/>
+      <stop offset="100%" stop-color="#ff4fd8"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="102" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="165" fill="none" stroke="url(#ring)" stroke-width="24"/>
+  <text x="256" y="295" text-anchor="middle" fill="#f6f2ff" font-family="Inter,Arial,sans-serif" font-size="124" font-weight="700">AI</text>
+</svg>

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0c0525" />
+  <title>Neon Infinity AI Studio</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="background"></div>
+  <main class="app-shell">
+    <header class="hero">
+      <h1>Neon Infinity AI Studio</h1>
+      <p>Create AI videos, talking portraits, images, and PDFs from prompts of any length.</p>
+      <p id="configStatus" class="status">Checking Gemini connection...</p>
+      <div class="hero-actions">
+        <button id="installBtn" class="neon-btn ghost" hidden>Install App</button>
+      </div>
+    </header>
+
+    <section class="grid">
+      <article class="card">
+        <h2>🎬 Video from Prompt</h2>
+        <textarea id="videoPrompt" placeholder="Describe any scene in detail..."></textarea>
+        <button class="neon-btn" id="videoPromptBtn">Generate Video</button>
+        <pre id="videoPromptResult"></pre>
+      </article>
+
+      <article class="card">
+        <h2>🧑‍🎤 Video from Photo + Voice</h2>
+        <textarea id="photoVideoPrompt" placeholder="Prompt for how the person should move, speak, and appear..."></textarea>
+        <label class="input-label">Person Photo<input type="file" id="personPhoto" accept="image/*" /></label>
+        <label class="input-label">Voice Sample (optional)<input type="file" id="personVoice" accept="audio/*" /></label>
+        <button class="neon-btn" id="photoVideoBtn">Generate Portrait Video</button>
+        <pre id="photoVideoResult"></pre>
+      </article>
+
+      <article class="card">
+        <h2>🖼️ Image from Prompt</h2>
+        <textarea id="imagePrompt" placeholder="Any image prompt, unlimited length..."></textarea>
+        <button class="neon-btn" id="imageBtn">Generate Image</button>
+        <img id="imageOutput" alt="Generated output" hidden />
+        <pre id="imageResult"></pre>
+      </article>
+
+      <article class="card">
+        <h2>📄 PDF from Prompt</h2>
+        <input id="pdfTitle" placeholder="Document title (optional)" />
+        <textarea id="pdfPrompt" placeholder="Describe what the PDF should contain..."></textarea>
+        <button class="neon-btn" id="pdfBtn">Generate PDF</button>
+        <a id="pdfLink" class="neon-link" hidden target="_blank">Open Generated PDF</a>
+        <pre id="pdfResult"></pre>
+      </article>
+    </section>
+  </main>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
