@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: videogen-neon-pwa
+    runtime: node
+    plan: free
+    branch: work
+    rootDir: .
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: NODE_VERSION
+        value: 20
